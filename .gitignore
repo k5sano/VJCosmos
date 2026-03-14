@@ -1,0 +1,25 @@
+# Xcode
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.moved-aside
+*.pyc
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# oF ビルド成果物
+bin/fluidTest
+bin/fluidTest.app/
+bin/fluidTestDebug.app/
+bin/ fluidTestDebug.app/
+obj/
+
+# ただし bin/data は追跡する
+!bin/data/
+
+# スクリーンショット（大量に生成されるため除外）
+bin/data/screenshot_*.png
