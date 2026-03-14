@@ -394,17 +394,31 @@ void ofApp::processOscMessages() {
         ofxOscMessage msg;
         oscReceiver.getNextMessage(msg);
         string addr = msg.getAddress();
+        oscMsgCount++;
+        lastOscAddr = addr;
+        lastOscTime = ofGetElapsedTimef();
 
-        if      (addr == "/vjcosmos/bass")     { oscBass     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
-        else if (addr == "/vjcosmos/mid")      { oscMid      = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
-        else if (addr == "/vjcosmos/high")     { oscHigh     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
-        else if (addr == "/vjcosmos/rms")      { oscRms      = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
-        else if (addr == "/vjcosmos/centroid") { oscCentroid  = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
-        else if (addr == "/vjcosmos/flux")     { oscFlux     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
-        else if (addr == "/vjcosmos/onset")    { oscOnset    = msg.getArgAsFloat(0) > 0.5f; oscFftActive = true; oscFftTimeout = 2.0f; }
+        if      (addr == "/vjcosmos/bass")     { oscBass     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr == "/vjcosmos/mid")      { oscMid      = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr == "/vjcosmos/high")     { oscHigh     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr == "/vjcosmos/rms")      { oscRms      = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr == "/vjcosmos/centroid") { oscCentroid  = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr == "/vjcosmos/flux")     { oscFlux     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr == "/vjcosmos/onset")    { oscOnset    = msg.getArgAsFloat(0) > 0.5f; oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
         else if (addr.length() > 17 && addr.substr(0, 17) == "/vjcosmos/param/") {
             string paramName = addr.substr(17);
-            if (msg.getNumArgs() > 0) oscParams[paramName] = msg.getArgAsFloat(0);
+            if (msg.getNumArgs() > 0) {
+                float val = msg.getArgAsFloat(0);
+                oscParams[paramName] = val;
+                oscParamMsgCount++;
+                oscParamLog[paramName] = { val, ofGetElapsedTimef(), true };
+                // Log first time or value change (throttled)
+                static std::map<std::string, float> lastLogged;
+                if (lastLogged.find(paramName) == lastLogged.end() || fabsf(lastLogged[paramName] - val) > 0.001f) {
+                    ofLogNotice("OSC") << "param: " << paramName << " = " << val;
+                    lastLogged[paramName] = val;
+                }
+            }
         }
     }
 
@@ -483,6 +497,7 @@ void ofApp::keyPressed(int key) {
         isFullscreen = false; ofSetFullscreen(false); ofShowCursor();
     }
     if (key == 'd' || key == 'D') showDebug     = !showDebug;
+    if (key == 'o' || key == 'O') showOscDebug  = !showOscDebug;
     if (key == 't' || key == 'T') showCoordText = !showCoordText;
     if (key == 'h' || key == 'H') showHelp      = !showHelp;
     if (key == 'v' || key == 'V') typoEnabled   = !typoEnabled;
@@ -1312,6 +1327,154 @@ void ofApp::draw() {
         ofDrawBitmapStringHighlight("[Syphon:VJCosmos] [Audio:" + audioName + "]"
             + (lastPresetName.empty() ? "" : " [Preset:" + lastPresetName + "]"), 10, y);
     }
+
+    // 7. OSC デバッグオーバーレイ
+    drawOscDebug();
+}
+
+// ── OSC Debug Overlay ─────────────────────────────────────────────────────────
+void ofApp::drawOscDebug() {
+    if (!showOscDebug) return;
+
+    float w = ofGetWidth(), h = ofGetHeight();
+    float now = ofGetElapsedTimef();
+    ofPushStyle();
+    ofSetColor(0, 0, 0, 180);
+    ofDrawRectangle(0, 0, w, h);
+
+    int x = 20, y = 30;
+
+    // Color helpers based on OscParamLog state
+    auto paramColor = [&](const string& key) -> ofColor {
+        auto it = oscParamLog.find(key);
+        if (it == oscParamLog.end() || !it->second.everReceived)
+            return ofColor(255, 80, 80);   // red: never received
+        if (now - it->second.receivedAt < 1.0f)
+            return ofColor(0, 255, 100);   // green: recently updated
+        return ofColor(255);               // white: received but stale
+    };
+    auto recvStr = [&](const string& key) -> string {
+        auto it = oscParamLog.find(key);
+        return (it != oscParamLog.end() && it->second.everReceived)
+            ? ofToString(it->second.value, 4) : "---";
+    };
+    auto mapStr = [&](const string& key) -> string {
+        auto it = oscParams.find(key);
+        return it != oscParams.end() ? ofToString(it->second, 4) : "---";
+    };
+
+    // ── Section A: Summary ──
+    float ago = now - lastOscTime;
+    ofSetColor(255, 255, 0);
+    ofDrawBitmapString("=== OSC DEBUG [O] close ===", x, y); y += 18;
+    ofSetColor(255);
+    string summary = "total:" + ofToString(oscMsgCount)
+        + " | fft:" + ofToString(oscFftMsgCount)
+        + " | param:" + ofToString(oscParamMsgCount)
+        + " | last: " + lastOscAddr + " (" + ofToString(ago, 1) + "s ago)";
+    ofDrawBitmapString(summary, x, y); y += 22;
+
+    // ── Section B: FFT values ──
+    ofSetColor(0, 220, 220);
+    ofDrawBitmapString("--- FFT (active:" + string(oscFftActive ? "YES" : "NO")
+        + " timeout:" + ofToString(oscFftTimeout, 1) + ") ---", x, y); y += 16;
+    struct FftRow { const char* name; float oscVal; float usedVal; };
+    FftRow fftRows[] = {
+        {"bass",     oscBass,     sBass},
+        {"mid",      oscMid,      sMid},
+        {"high",     oscHigh,     sHigh},
+        {"rms",      oscRms,      sRms},
+        {"centroid", oscCentroid, sCentroid},
+        {"flux",     oscFlux,     sFlux},
+    };
+    for (auto& r : fftRows) {
+        ofSetColor(oscFftActive ? ofColor(0,255,100) : ofColor(255));
+        char buf[120];
+        snprintf(buf, sizeof(buf), "%-12s OSC:%-8.4f | used:%-8.4f | src:%s",
+                 r.name, r.oscVal, r.usedVal, oscFftActive ? "OSC" : "LOCAL");
+        ofDrawBitmapString(buf, x, y); y += 14;
+    }
+    {
+        ofSetColor(oscFftActive ? ofColor(0,255,100) : ofColor(255));
+        char buf[80];
+        snprintf(buf, sizeof(buf), "%-12s OSC:%-8s | used:%-8s | src:%s",
+                 "onset", oscOnset?"true":"false", onset?"true":"false", oscFftActive?"OSC":"LOCAL");
+        ofDrawBitmapString(buf, x, y); y += 20;
+    }
+
+    // ── Section C: Continuous params ──
+    ofSetColor(0, 220, 220);
+    ofDrawBitmapString("--- CONTINUOUS PARAMS ---", x, y); y += 16;
+    struct ParamRow { const char* name; const char* key; float varVal; };
+    ParamRow pRows[] = {
+        {"dissipation",     "dissipation",     mDissipation},
+        {"velDissipation",  "velDissipation",  mVelDissipation},
+        {"gravity",         "gravity",         mGravity},
+        {"bloomIntensity",  "bloomIntensity",  mBloomIntensity},
+        {"bloomThreshold",  "bloomThreshold",  mBloomThreshold},
+        {"bassSens",        "bassSens",        mBassSens},
+        {"midSens",         "midSens",         mMidSens},
+        {"highSens",        "highSens",        mHighSens},
+        {"rotSpeed",        "rotSpeed",        mRotSpeed},
+        {"displacement",    "displacement",    mDisplacement},
+        {"glitchFreq",      "glitchFreq",      mGlitchFreq},
+        {"fluidSaturation", "fluidSaturation", mFluidSaturation},
+        {"plexusSpeed",     "plexusSpeed",     mPlexusSpeed},
+        {"masterBrightness","masterBrightness", mMasterBright},
+    };
+    for (auto& r : pRows) {
+        ofSetColor(paramColor(r.key));
+        char buf[140];
+        snprintf(buf, sizeof(buf), "%-18s recv:%-8s | map:%-8s | var:%-10.4f",
+                 r.name, recvStr(r.key).c_str(), mapStr(r.key).c_str(), r.varVal);
+        ofDrawBitmapString(buf, x, y); y += 14;
+    }
+    y += 6;
+
+    // ── Section D: Effect toggles ──
+    ofSetColor(0, 220, 220);
+    ofDrawBitmapString("--- EFFECT TOGGLES ---", x, y); y += 16;
+    struct TogRow { const char* name; const char* key; int fxIdx; };
+    TogRow tRows[] = {
+        {"fxKaleido", "fxKaleido", FX_KALEIDO},
+        {"fxCrt",     "fxCrt",     FX_CRT},
+        {"fxWave",    "fxWave",    FX_WAVE},
+        {"fxGlitch",  "fxGlitch",  FX_GLITCH},
+        {"fxEdge",    "fxEdge",    FX_EDGE},
+        {"fxMono",    "fxMono",    FX_MONO},
+        {"fxMirror",  "fxMirror",  FX_MIRROR},
+    };
+    for (auto& r : tRows) {
+        ofSetColor(paramColor(r.key));
+        char buf[120];
+        snprintf(buf, sizeof(buf), "%-12s recv:%-8s | map:%-8s | enabled:%-5s",
+                 r.name, recvStr(r.key).c_str(), mapStr(r.key).c_str(),
+                 fx[r.fxIdx].enabled ? "true" : "false");
+        ofDrawBitmapString(buf, x, y); y += 14;
+    }
+    y += 6;
+
+    // ── Effect params ──
+    ofSetColor(0, 220, 220);
+    ofDrawBitmapString("--- EFFECT PARAMS ---", x, y); y += 16;
+    ParamRow epRows[] = {
+        {"waveAmplitude",  "waveAmplitude",  waveAmplitude},
+        {"waveSpeed",      "waveSpeed",      waveSpeed},
+        {"edgeStrength",   "edgeStrength",   edgeStrength},
+        {"edgeMix",        "edgeMix",        edgeMix},
+        {"monoMode",       "monoMode",       monoMode},
+        {"mirrorMode",     "mirrorMode",     mirrorMode},
+        {"colorPalette",   "colorPalette",   (float)colorPalette},
+    };
+    for (auto& r : epRows) {
+        ofSetColor(paramColor(r.key));
+        char buf[140];
+        snprintf(buf, sizeof(buf), "%-18s recv:%-8s | map:%-8s | var:%-10.4f",
+                 r.name, recvStr(r.key).c_str(), mapStr(r.key).c_str(), r.varVal);
+        ofDrawBitmapString(buf, x, y); y += 14;
+    }
+
+    ofPopStyle();
 }
 
 // ── Preset Save ───────────────────────────────────────────────────────────────

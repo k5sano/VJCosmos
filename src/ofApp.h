@@ -115,6 +115,23 @@ public:
     float oscFftTimeout = 0;
     std::map<std::string, float> oscParams;
 
+    // ── OSC Debug ────────────────────────────────────────────────────────────
+    bool  showOscDebug = false;
+    int   oscMsgCount = 0;
+    int   oscParamMsgCount = 0;
+    int   oscFftMsgCount = 0;
+    std::string lastOscAddr;
+    float lastOscTime = 0;
+
+    struct OscParamLog {
+        float value = 0;
+        float receivedAt = 0;
+        bool  everReceived = false;
+    };
+    std::map<std::string, OscParamLog> oscParamLog;
+
+    void  drawOscDebug();
+
     // ── MIDI ─────────────────────────────────────────────────────────────────
     ofxMidiIn             midiIn;
     void                  newMidiMessage(ofxMidiMessage& msg) override;
