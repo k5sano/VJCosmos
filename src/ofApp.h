@@ -3,6 +3,7 @@
 #include "ofxFluid.h"
 #include "ofxFft.h"
 #include "ofxMidi.h"
+#include "ofxSyphon.h"
 #include <mutex>
 #include <map>
 #include <set>
@@ -46,7 +47,7 @@ struct ShaderLayer {
     string   name;
     ofShader shader;
     bool     enabled = false;
-    int      key;        // トグルキー
+    int      key;
 };
 
 class ofApp : public ofBaseApp, public ofxMidiListener {
@@ -169,7 +170,6 @@ public:
     ofFbo effectFboA, effectFboB;
 
     // ── エフェクトレイヤー（適用順） ──────────────────────────────────────────
-    // 0: Kaleidoscope, 1: Wave, 2: Glitch, 3: Edge, 4: Mono, 5: Mirror, 6: CRT
     static const int FX_KALEIDO = 0;
     static const int FX_WAVE    = 1;
     static const int FX_GLITCH  = 2;
@@ -230,6 +230,20 @@ public:
     void setupTypography();
     void updateTypography(float dt, float w, float h);
     void injectTypography(float w, float h);
+
+    // ── Syphon 出力 ──────────────────────────────────────────────────────────
+    ofxSyphonServer syphonServer;
+
+    // ── プリセット保存/ロード ────────────────────────────────────────────────
+    string lastPresetName = "";
+    void savePreset(const string& name);
+    void loadPreset(const string& name);
+    std::vector<std::string> listPresets();
+
+    // ── オーディオデバイス選択 ────────────────────────────────────────────────
+    std::vector<ofSoundDevice> inputDevices;
+    int currentAudioDevice = 0;
+    void switchAudioDevice(int index);
 
 private:
     void drawPolygon(const GlitchPolygon& p, float offsetX,

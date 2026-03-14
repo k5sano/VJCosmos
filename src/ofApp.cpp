@@ -197,6 +197,22 @@ void ofApp::setup() {
     }
     midiIn.addListener(this);
     midiIn.ignoreTypes(true, true, true);
+
+    // ── Syphon ────────────────────────────────────────────────────────────────
+    syphonServer.setName("VJCosmos");
+
+    // ── オーディオデバイス一覧 ────────────────────────────────────────────────
+    auto allDevices = soundStream.getDeviceList(ofSoundDevice::Api::DEFAULT);
+    for (auto& d : allDevices) {
+        if (d.inputChannels > 0) inputDevices.push_back(d);
+    }
+    ofLogNotice("AUDIO") << inputDevices.size() << " input devices found";
+    for (int i = 0; i < (int)inputDevices.size(); i++) {
+        ofLogNotice("AUDIO") << "  [" << i << "] " << inputDevices[i].name;
+    }
+
+    // ── プリセットディレクトリ ────────────────────────────────────────────────
+    ofDirectory::createDirectory("presets", true, true);
 }
 
 // ── AudioIn (audio thread) ────────────────────────────────────────────────────
@@ -389,11 +405,36 @@ void ofApp::keyPressed(int key) {
     if (key == 't' || key == 'T') showCoordText = !showCoordText;
     if (key == 'h' || key == 'H') showHelp      = !showHelp;
     if (key == 'v' || key == 'V') typoEnabled   = !typoEnabled;
+    if (key == 'a' || key == 'A') {
+        if (!inputDevices.empty()) {
+            currentAudioDevice = (currentAudioDevice + 1) % inputDevices.size();
+            switchAudioDevice(currentAudioDevice);
+        }
+    }
 
     // エフェクトレイヤーのトグル
     for (int i = 0; i < FX_COUNT; i++) {
         if (key == fx[i].key || key == toupper(fx[i].key))
             fx[i].enabled = !fx[i].enabled;
+    }
+
+    // プリセット: Cmd+S = quick save, Cmd+L = quick load
+    bool cmd = ofGetKeyPressed(OF_KEY_COMMAND);
+    if (cmd && (key == 's' || key == 'S')) { savePreset("quick"); return; }
+    if (cmd && (key == 'l' || key == 'L')) { loadPreset("quick"); return; }
+
+    // Cmd+1〜8: save preset_1〜8
+    if (cmd && key >= '1' && key <= '8') {
+        savePreset("preset_" + ofToString(key - '0'));
+        return;
+    }
+    // Shift+1〜8: load preset_1〜8 (Shift+数字のキーコード)
+    const string shiftDigits = "!@#$%^&*";
+    for (int i = 0; i < 8; i++) {
+        if (key == shiftDigits[i]) {
+            loadPreset("preset_" + ofToString(i + 1));
+            return;
+        }
     }
 }
 
@@ -1090,6 +1131,14 @@ void ofApp::draw() {
     // 3. エフェクトチェーン（ピンポン FBO）→ 画面
     applyEffectChain(w, h);
 
+    // 3.5 Syphon 出力（エフェクト適用後、UI描画前）
+    // applyEffectChain が最終結果を画面に描画済み。
+    // 最終 FBO のテクスチャを publish する。
+    // applyEffectChain 内で src が最終結果を指しているが、
+    // ここでは sceneFbo を使う（エフェクトなしの場合）か effectFboA/B。
+    // 簡易的に publishScreen を使う（画面全体をキャプチャ、UI描画前）
+    syphonServer.publishScreen();
+
     // 4. マスター明るさ
     if (mMasterBright < 0.99f) {
         ofPushStyle();
@@ -1118,7 +1167,8 @@ void ofApp::draw() {
         ofDrawBitmapString("T  Coord text", x, y); y+=16;
         ofDrawBitmapString("H  This help", x, y); y+=16;
         ofDrawBitmapString("R  Fluid pause", x, y); y+=16;
-        ofDrawBitmapString("V  Typography", x, y); y+=24;
+        ofDrawBitmapString("V  Typography", x, y); y+=16;
+        ofDrawBitmapString("A  Switch Audio Device", x, y); y+=24;
         ofDrawBitmapString("--- EFFECTS ---", x, y); y+=18;
         for (int i = 0; i < FX_COUNT; i++) {
             char c = (char)fx[i].key;
@@ -1126,6 +1176,12 @@ void ofApp::draw() {
                          + "  " + fx[i].name + ": " + (fx[i].enabled?"ON":"OFF");
             ofDrawBitmapString(label, x, y); y+=16;
         }
+        y+=8;
+        ofDrawBitmapString("--- PRESETS ---", x, y); y+=18;
+        ofDrawBitmapString("Cmd+S     Quick Save", x, y); y+=16;
+        ofDrawBitmapString("Cmd+L     Quick Load", x, y); y+=16;
+        ofDrawBitmapString("Cmd+1~8   Save Slot", x, y); y+=16;
+        ofDrawBitmapString("Shift+1~8 Load Slot", x, y); y+=16;
         ofPopStyle();
     }
 
@@ -1151,6 +1207,180 @@ void ofApp::draw() {
         ofDrawBitmapStringHighlight("bloom:"+(bloomEnabled?string("ON"):"OFF")
             +" plexus:"+(plexusVisible?"ON":"OFF")
             +" freeze:"+(frozen?"ON":"OFF")
-            +" [H]elp", 10, y);
+            +" [H]elp", 10, y); y+=16;
+
+        string audioName = (currentAudioDevice < (int)inputDevices.size())
+            ? inputDevices[currentAudioDevice].name : "default";
+        ofDrawBitmapStringHighlight("[Syphon:VJCosmos] [Audio:" + audioName + "]"
+            + (lastPresetName.empty() ? "" : " [Preset:" + lastPresetName + "]"), 10, y);
     }
+}
+
+// ── Preset Save ───────────────────────────────────────────────────────────────
+void ofApp::savePreset(const string& name) {
+    ofJson j;
+    j["version"] = 1;
+    j["name"] = name;
+
+    j["fluid"]["dissipation"] = mDissipation;
+    j["fluid"]["velocityDissipation"] = mVelDissipation;
+    j["fluid"]["gravity"] = mGravity;
+
+    j["bloom"]["enabled"] = bloomEnabled;
+    j["bloom"]["intensity"] = mBloomIntensity;
+    j["bloom"]["threshold"] = mBloomThreshold;
+
+    j["audio"]["bassSens"] = mBassSens;
+    j["audio"]["midSens"] = mMidSens;
+    j["audio"]["highSens"] = mHighSens;
+
+    j["effects"]["kaleidoscope"]["enabled"] = fx[FX_KALEIDO].enabled;
+    j["effects"]["kaleidoscope"]["segments"] = kaleidoSegments;
+    j["effects"]["crt"]["enabled"] = fx[FX_CRT].enabled;
+    j["effects"]["wave"]["enabled"] = fx[FX_WAVE].enabled;
+    j["effects"]["wave"]["amplitude"] = waveAmplitude;
+    j["effects"]["wave"]["frequency"] = waveFrequency;
+    j["effects"]["wave"]["speed"] = waveSpeed;
+    j["effects"]["glitch"]["enabled"] = fx[FX_GLITCH].enabled;
+    j["effects"]["glitch"]["intensity"] = glitchIntensity;
+    j["effects"]["glitch"]["blockSize"] = glitchBlockSize;
+    j["effects"]["edge"]["enabled"] = fx[FX_EDGE].enabled;
+    j["effects"]["edge"]["strength"] = edgeStrength;
+    j["effects"]["edge"]["mix"] = edgeMix;
+    j["effects"]["mono"]["enabled"] = fx[FX_MONO].enabled;
+    j["effects"]["mono"]["mode"] = monoMode;
+    j["effects"]["mono"]["intensity"] = monoIntensity;
+    j["effects"]["mirror"]["enabled"] = fx[FX_MIRROR].enabled;
+    j["effects"]["mirror"]["mode"] = mirrorMode;
+
+    j["visuals"]["plexusVisible"] = plexusVisible;
+    j["visuals"]["colorPalette"] = (int)colorPalette;
+    j["visuals"]["meshGeometry"] = (int)meshGeometry;
+    j["visuals"]["rotSpeed"] = mRotSpeed;
+    j["visuals"]["displacement"] = mDisplacement;
+    j["visuals"]["glitchFreq"] = mGlitchFreq;
+    j["visuals"]["fluidSaturation"] = mFluidSaturation;
+    j["visuals"]["plexusSpeed"] = mPlexusSpeed;
+    j["visuals"]["masterBrightness"] = mMasterBright;
+    j["visuals"]["plexusThresh"] = mPlexusThresh;
+    j["visuals"]["typoEnabled"] = typoEnabled;
+
+    string path = "presets/" + name + ".json";
+    ofSaveJson(path, j);
+    lastPresetName = name;
+    ofLogNotice("PRESET") << "saved: " << path;
+}
+
+// ── Preset Load ───────────────────────────────────────────────────────────────
+void ofApp::loadPreset(const string& name) {
+    string path = "presets/" + name + ".json";
+    ofFile file(path);
+    if (!file.exists()) {
+        ofLogWarning("PRESET") << "not found: " << path;
+        return;
+    }
+
+    ofJson j = ofLoadJson(path);
+
+    if (j.contains("fluid")) {
+        mDissipation    = j["fluid"].value("dissipation", mDissipation);
+        mVelDissipation = j["fluid"].value("velocityDissipation", mVelDissipation);
+        mGravity        = j["fluid"].value("gravity", mGravity);
+    }
+    if (j.contains("bloom")) {
+        bloomEnabled    = j["bloom"].value("enabled", bloomEnabled);
+        mBloomIntensity = j["bloom"].value("intensity", mBloomIntensity);
+        mBloomThreshold = j["bloom"].value("threshold", mBloomThreshold);
+    }
+    if (j.contains("audio")) {
+        mBassSens = j["audio"].value("bassSens", mBassSens);
+        mMidSens  = j["audio"].value("midSens", mMidSens);
+        mHighSens = j["audio"].value("highSens", mHighSens);
+    }
+    if (j.contains("effects")) {
+        auto& e = j["effects"];
+        if (e.contains("kaleidoscope")) {
+            fx[FX_KALEIDO].enabled = e["kaleidoscope"].value("enabled", false);
+            kaleidoSegments = e["kaleidoscope"].value("segments", 6);
+        }
+        if (e.contains("crt"))
+            fx[FX_CRT].enabled = e["crt"].value("enabled", false);
+        if (e.contains("wave")) {
+            fx[FX_WAVE].enabled = e["wave"].value("enabled", false);
+            waveAmplitude = e["wave"].value("amplitude", 10.0f);
+            waveFrequency = e["wave"].value("frequency", 0.05f);
+            waveSpeed     = e["wave"].value("speed", 2.0f);
+        }
+        if (e.contains("glitch")) {
+            fx[FX_GLITCH].enabled = e["glitch"].value("enabled", false);
+            glitchIntensity = e["glitch"].value("intensity", 0.3f);
+            glitchBlockSize = e["glitch"].value("blockSize", 30.0f);
+        }
+        if (e.contains("edge")) {
+            fx[FX_EDGE].enabled = e["edge"].value("enabled", false);
+            edgeStrength = e["edge"].value("strength", 1.0f);
+            edgeMix      = e["edge"].value("mix", 0.3f);
+        }
+        if (e.contains("mono")) {
+            fx[FX_MONO].enabled = e["mono"].value("enabled", false);
+            monoMode      = e["mono"].value("mode", 0.0f);
+            monoIntensity = e["mono"].value("intensity", 1.0f);
+        }
+        if (e.contains("mirror")) {
+            fx[FX_MIRROR].enabled = e["mirror"].value("enabled", false);
+            mirrorMode = e["mirror"].value("mode", 0.0f);
+        }
+    }
+    if (j.contains("visuals")) {
+        auto& v = j["visuals"];
+        plexusVisible    = v.value("plexusVisible", true);
+        colorPalette     = (ColorPalette)v.value("colorPalette", (int)PALETTE_RAINBOW);
+        int geom         = v.value("meshGeometry", (int)GEOM_ICOSPHERE);
+        if (geom != (int)meshGeometry) {
+            meshGeometry = (MeshGeometry)geom;
+            rebuildMesh();
+        }
+        mRotSpeed        = v.value("rotSpeed", 15.0f);
+        mDisplacement    = v.value("displacement", 1.0f);
+        mGlitchFreq      = v.value("glitchFreq", 1.0f);
+        mFluidSaturation = v.value("fluidSaturation", 1.0f);
+        mPlexusSpeed     = v.value("plexusSpeed", 1.0f);
+        mMasterBright    = v.value("masterBrightness", 1.0f);
+        mPlexusThresh    = v.value("plexusThresh", 150.0f);
+        typoEnabled      = v.value("typoEnabled", false);
+    }
+
+    lastPresetName = name;
+    ofLogNotice("PRESET") << "loaded: " << path;
+}
+
+// ── List Presets ──────────────────────────────────────────────────────────────
+std::vector<std::string> ofApp::listPresets() {
+    std::vector<std::string> names;
+    ofDirectory dir("presets");
+    dir.allowExt("json");
+    dir.listDir();
+    for (auto& f : dir) {
+        names.push_back(f.getBaseName());
+    }
+    return names;
+}
+
+// ── Switch Audio Device ───────────────────────────────────────────────────────
+void ofApp::switchAudioDevice(int index) {
+    if (index < 0 || index >= (int)inputDevices.size()) return;
+
+    soundStream.close();
+
+    ofSoundStreamSettings ss;
+    ss.setInListener(this);
+    ss.setInDevice(inputDevices[index]);
+    ss.sampleRate = (int)SAMPLE_RATE;
+    ss.numInputChannels = 1;
+    ss.numOutputChannels = 0;
+    ss.bufferSize = BUFFER_SIZE;
+    soundStream.setup(ss);
+
+    currentAudioDevice = index;
+    ofLogNotice("AUDIO") << "switched to: " << inputDevices[index].name;
 }
