@@ -198,6 +198,10 @@ void ofApp::setup() {
     midiIn.addListener(this);
     midiIn.ignoreTypes(true, true, true);
 
+    // ── OSC ────────────────────────────────────────────────────────────────────
+    oscReceiver.setup(OSC_PORT);
+    ofLogNotice("OSC") << "Listening on port " << OSC_PORT;
+
     // ── Syphon ────────────────────────────────────────────────────────────────
     syphonServer.setName("VJCosmos");
 
@@ -291,6 +295,56 @@ void ofApp::applyMidiParams(float dt) {
         windRight = midiCC.count(CC_RIGHT) && midiCC[CC_RIGHT] > 0.5f;
     }
 
+    // OSC parameter overrides (take priority over MIDI)
+    auto oscOverride = [&](const std::string& name, float& target) {
+        auto it = oscParams.find(name);
+        if (it != oscParams.end()) target = it->second;
+    };
+    oscOverride("dissipation",      targets[0]);
+    oscOverride("velDissipation",   targets[1]);
+    oscOverride("bloomIntensity",   targets[2]);
+    oscOverride("bloomThreshold",   targets[3]);
+    oscOverride("bassSens",         targets[4]);
+    oscOverride("midSens",          targets[5]);
+    oscOverride("highSens",         targets[6]);
+    oscOverride("rotSpeed",         targets[8]);
+    oscOverride("displacement",     targets[9]);
+    oscOverride("glitchFreq",       targets[10]);
+    oscOverride("gravity",          targets[11]);
+    oscOverride("fluidSaturation",  targets[12]);
+    oscOverride("plexusSpeed",      targets[13]);
+    oscOverride("masterBrightness", targets[15]);
+
+    // Boolean/int params from OSC
+    auto oscBoolOverride = [&](const std::string& name, bool& target) {
+        auto it = oscParams.find(name);
+        if (it != oscParams.end()) target = it->second > 0.5f;
+    };
+    oscBoolOverride("fxKaleido", fx[FX_KALEIDO].enabled);
+    oscBoolOverride("fxCrt",     fx[FX_CRT].enabled);
+    oscBoolOverride("fxWave",    fx[FX_WAVE].enabled);
+    oscBoolOverride("fxGlitch",  fx[FX_GLITCH].enabled);
+    oscBoolOverride("fxEdge",    fx[FX_EDGE].enabled);
+    oscBoolOverride("fxMono",    fx[FX_MONO].enabled);
+    oscBoolOverride("fxMirror",  fx[FX_MIRROR].enabled);
+
+    // Effect parameters from OSC
+    auto oscFloat = [&](const std::string& name, float& target) {
+        auto it = oscParams.find(name);
+        if (it != oscParams.end()) target = it->second;
+    };
+    oscFloat("waveAmplitude", waveAmplitude);
+    oscFloat("waveSpeed",     waveSpeed);
+    oscFloat("edgeStrength",  edgeStrength);
+    oscFloat("edgeMix",       edgeMix);
+    oscFloat("monoMode",      monoMode);
+    oscFloat("mirrorMode",    mirrorMode);
+    {
+        auto it = oscParams.find("colorPalette");
+        if (it != oscParams.end())
+            colorPalette = (ColorPalette)ofClamp((int)it->second, 0, PALETTE_COUNT - 1);
+    }
+
     const float sm = 0.1f;
     mDissipation     = ofLerp(mDissipation,     targets[0],  sm);
     mVelDissipation  = ofLerp(mVelDissipation,  targets[1],  sm);
@@ -332,6 +386,33 @@ void ofApp::applyMidiParams(float dt) {
     if (trigGlitch)  { spawnPolygons((int)ofRandom(10, 25), true); flashAlpha = 30.0f; }
     if (trigMesh)    { meshGeometry = (MeshGeometry)((meshGeometry + 1) % GEOM_COUNT); rebuildMesh(); }
     if (trigShot)    ofSaveScreen("screenshot_" + ofGetTimestampString() + ".png");
+}
+
+// ── OSC Message Processing ────────────────────────────────────────────────────
+void ofApp::processOscMessages() {
+    while (oscReceiver.hasWaitingMessages()) {
+        ofxOscMessage msg;
+        oscReceiver.getNextMessage(msg);
+        string addr = msg.getAddress();
+
+        if      (addr == "/vjcosmos/bass")     { oscBass     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
+        else if (addr == "/vjcosmos/mid")      { oscMid      = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
+        else if (addr == "/vjcosmos/high")     { oscHigh     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
+        else if (addr == "/vjcosmos/rms")      { oscRms      = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
+        else if (addr == "/vjcosmos/centroid") { oscCentroid  = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
+        else if (addr == "/vjcosmos/flux")     { oscFlux     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; }
+        else if (addr == "/vjcosmos/onset")    { oscOnset    = msg.getArgAsFloat(0) > 0.5f; oscFftActive = true; oscFftTimeout = 2.0f; }
+        else if (addr.length() > 17 && addr.substr(0, 17) == "/vjcosmos/param/") {
+            string paramName = addr.substr(17);
+            if (msg.getNumArgs() > 0) oscParams[paramName] = msg.getArgAsFloat(0);
+        }
+    }
+
+    float dt = ofGetLastFrameTime();
+    if (oscFftActive) {
+        oscFftTimeout -= dt;
+        if (oscFftTimeout <= 0) oscFftActive = false;
+    }
 }
 
 // ── Rebuild Mesh ──────────────────────────────────────────────────────────────
@@ -744,6 +825,7 @@ void ofApp::update() {
     float t  = ofGetElapsedTimef();
     float dt = std::max((float)ofGetLastFrameTime(), 0.001f);
 
+    processOscMessages();
     applyMidiParams(dt);
     if (frozen) return;
 
@@ -782,6 +864,22 @@ void ofApp::update() {
     onset = (sFlux > FLUX_ONSET_THRESH && sRms > 0.01f);
     onsetRising = onset && !prevOnset;
     prevOnset   = onset;
+
+    // Override with OSC FFT values if active
+    if (oscFftActive) {
+        sBass     = oscBass;
+        sMid      = oscMid;
+        sHigh     = oscHigh;
+        sRms      = oscRms;
+        sCentroid = oscCentroid;
+        sFlux     = oscFlux;
+        onset     = oscOnset;
+        effBass   = sBass * mBassSens;
+        effMid    = sMid  * mMidSens;
+        effHigh   = sHigh * mHighSens;
+        onsetRising = onset && !prevOnset;
+        prevOnset   = onset;
+    }
 
     // エフェクトパラメータ更新
     updateEffectParams(dt);

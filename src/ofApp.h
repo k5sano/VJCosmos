@@ -4,6 +4,7 @@
 #include "ofxFft.h"
 #include "ofxMidi.h"
 #include "ofxSyphon.h"
+#include "ofxOsc.h"
 #include <mutex>
 #include <map>
 #include <set>
@@ -102,6 +103,17 @@ public:
     void setupPlexus();
     void updatePlexus(float dt, float t, float w, float h);
     void drawPlexusLayer(float w, float h);
+
+    // ── OSC ──────────────────────────────────────────────────────────────────
+    ofxOscReceiver oscReceiver;
+    static const int OSC_PORT = 9000;
+    void processOscMessages();
+    bool  oscFftActive = false;
+    float oscBass = 0, oscMid = 0, oscHigh = 0;
+    float oscRms = 0, oscCentroid = 0, oscFlux = 0;
+    bool  oscOnset = false;
+    float oscFftTimeout = 0;
+    std::map<std::string, float> oscParams;
 
     // ── MIDI ─────────────────────────────────────────────────────────────────
     ofxMidiIn             midiIn;
