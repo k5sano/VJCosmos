@@ -321,22 +321,6 @@ void ofApp::applyMidiParams(float dt) {
         if (it != oscParams.end()) target = it->second > 0.5f;
     };
     oscBoolOverride("fxKaleido", fx[FX_KALEIDO].enabled);
-    // Debug: log oscParams state for fxKaleido
-    {
-        static int dbgCount = 0;
-        if (dbgCount < 50 || dbgCount % 60 == 0) {
-            auto it = oscParams.find("fxKaleido");
-            bool found = (it != oscParams.end());
-            FILE* df = fopen("/tmp/vjcosmos_param_debug.log", "a");
-            if (df) {
-                fprintf(df, "frame %d: oscParams[fxKaleido] found=%d val=%f enabled=%d oscParamsSize=%d\n",
-                        dbgCount, found, found ? it->second : -1.0f,
-                        fx[FX_KALEIDO].enabled, (int)oscParams.size());
-                fclose(df);
-            }
-        }
-        dbgCount++;
-    }
     oscBoolOverride("fxCrt",     fx[FX_CRT].enabled);
     oscBoolOverride("fxWave",    fx[FX_WAVE].enabled);
     oscBoolOverride("fxGlitch",  fx[FX_GLITCH].enabled);
@@ -419,15 +403,23 @@ void ofApp::processOscMessages() {
         ofxOscMessage msg;
         oscReceiver.getNextMessage(msg);
         string addr = msg.getAddress();
+
+        // Strip any control characters / null bytes from addr
+        addr.erase(std::remove_if(addr.begin(), addr.end(),
+            [](unsigned char c){ return c < 0x20; }), addr.end());
+
         oscMsgCount++;
         lastOscAddr = addr;
         lastOscTime = ofGetElapsedTimef();
 
-        // Dump raw addresses via C stdio
-        if (oscDumpCount < 200) {
+        // Hex dump for diagnosis (first 100 messages)
+        if (oscDumpCount < 100) {
             FILE* df = fopen("/tmp/vjcosmos_osc_debug.log", "a");
             if (df) {
-                fprintf(df, "%d: addr=\"%s\" len=%d args=%d", oscDumpCount, addr.c_str(), (int)addr.length(), (int)msg.getNumArgs());
+                fprintf(df, "%d: addr=\"%s\" len=%d args=%d hex=",
+                        oscDumpCount, addr.c_str(), (int)addr.length(), (int)msg.getNumArgs());
+                for (int i = 0; i < (int)addr.size() && i < 30; i++)
+                    fprintf(df, "%02X ", (unsigned char)addr[i]);
                 for (int i = 0; i < std::min((int)msg.getNumArgs(), 3); i++) {
                     if (msg.getArgType(i) == OFXOSC_TYPE_FLOAT) fprintf(df, " arg%d=%f", i, msg.getArgAsFloat(i));
                     else if (msg.getArgType(i) == OFXOSC_TYPE_INT32) fprintf(df, " arg%d=%d", i, msg.getArgAsInt32(i));
@@ -439,35 +431,28 @@ void ofApp::processOscMessages() {
             }
         }
 
-        if      (addr == "/vjcosmos/bass")     { oscBass     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
-        else if (addr == "/vjcosmos/mid")      { oscMid      = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
-        else if (addr == "/vjcosmos/high")     { oscHigh     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
-        else if (addr == "/vjcosmos/rms")      { oscRms      = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
-        else if (addr == "/vjcosmos/centroid") { oscCentroid  = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
-        else if (addr == "/vjcosmos/flux")     { oscFlux     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
-        else if (addr == "/vjcosmos/onset")    { oscOnset    = msg.getArgAsFloat(0) > 0.5f; oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
-        else if (addr.length() > 17 && addr.substr(0, 17) == "/vjcosmos/param/") {
-            string paramName = addr.substr(17);
-            if (msg.getNumArgs() > 0) {
-                float val = msg.getArgAsFloat(0);
-                oscParams[paramName] = val;
-                oscParamMsgCount++;
-                // Verify storage
-                {
-                    FILE* vf = fopen("/tmp/vjcosmos_store_debug.log", "a");
-                    if (vf) {
-                        fprintf(vf, "STORED: %s = %f, oscParams.size()=%d\n",
-                                paramName.c_str(), val, (int)oscParams.size());
-                        fclose(vf);
-                    }
-                }
-                oscParamLog[paramName] = { val, ofGetElapsedTimef(), true };
-                // Log first time or value change (throttled)
-                static std::map<std::string, float> lastLogged;
-                if (lastLogged.find(paramName) == lastLogged.end() || fabsf(lastLogged[paramName] - val) > 0.001f) {
-                    ofLogNotice("OSC") << "param: " << paramName << " = " << val;
-                    lastLogged[paramName] = val;
-                }
+        // Use find() instead of substr() == for robustness
+        if      (addr.find("/vjcosmos/bass")     != string::npos) { oscBass     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr.find("/vjcosmos/mid")      != string::npos) { oscMid      = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr.find("/vjcosmos/high")     != string::npos) { oscHigh     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr.find("/vjcosmos/rms")      != string::npos) { oscRms      = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr.find("/vjcosmos/centroid") != string::npos) { oscCentroid  = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr.find("/vjcosmos/flux")     != string::npos) { oscFlux     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+        else if (addr.find("/vjcosmos/onset")    != string::npos) { oscOnset    = msg.getArgAsFloat(0) > 0.5f; oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
+
+        // Parameter messages (always check, not else-if, in case find matches above too)
+        auto paramPos = addr.find("/vjcosmos/param/");
+        if (paramPos != string::npos && msg.getNumArgs() > 0) {
+            string paramName = addr.substr(paramPos + 16);
+            float val = msg.getArgAsFloat(0);
+            oscParams[paramName] = val;
+            oscParamMsgCount++;
+            oscParamLog[paramName] = { val, ofGetElapsedTimef(), true };
+            // Log value changes (throttled)
+            static std::map<std::string, float> lastLogged;
+            if (lastLogged.find(paramName) == lastLogged.end() || fabsf(lastLogged[paramName] - val) > 0.001f) {
+                ofLogNotice("OSC") << "param: " << paramName << " = " << val;
+                lastLogged[paramName] = val;
             }
         }
     }
