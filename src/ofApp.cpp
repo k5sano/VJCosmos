@@ -321,6 +321,22 @@ void ofApp::applyMidiParams(float dt) {
         if (it != oscParams.end()) target = it->second > 0.5f;
     };
     oscBoolOverride("fxKaleido", fx[FX_KALEIDO].enabled);
+    // Debug: log oscParams state for fxKaleido
+    {
+        static int dbgCount = 0;
+        if (dbgCount < 50 || dbgCount % 60 == 0) {
+            auto it = oscParams.find("fxKaleido");
+            bool found = (it != oscParams.end());
+            FILE* df = fopen("/tmp/vjcosmos_param_debug.log", "a");
+            if (df) {
+                fprintf(df, "frame %d: oscParams[fxKaleido] found=%d val=%f enabled=%d oscParamsSize=%d\n",
+                        dbgCount, found, found ? it->second : -1.0f,
+                        fx[FX_KALEIDO].enabled, (int)oscParams.size());
+                fclose(df);
+            }
+        }
+        dbgCount++;
+    }
     oscBoolOverride("fxCrt",     fx[FX_CRT].enabled);
     oscBoolOverride("fxWave",    fx[FX_WAVE].enabled);
     oscBoolOverride("fxGlitch",  fx[FX_GLITCH].enabled);
@@ -390,6 +406,15 @@ void ofApp::applyMidiParams(float dt) {
 
 // ── OSC Message Processing ────────────────────────────────────────────────────
 void ofApp::processOscMessages() {
+    // Dump raw OSC addresses to file for diagnosis (first 200 messages)
+    static int oscDumpCount = 0;
+    static bool oscDumpInit = false;
+    if (!oscDumpInit) {
+        oscDumpInit = true;
+        FILE* f = fopen("/tmp/vjcosmos_osc_debug.log", "w");
+        if (f) { fprintf(f, "=== OSC Debug Log ===\n"); fclose(f); }
+    }
+
     while (oscReceiver.hasWaitingMessages()) {
         ofxOscMessage msg;
         oscReceiver.getNextMessage(msg);
@@ -397,6 +422,22 @@ void ofApp::processOscMessages() {
         oscMsgCount++;
         lastOscAddr = addr;
         lastOscTime = ofGetElapsedTimef();
+
+        // Dump raw addresses via C stdio
+        if (oscDumpCount < 200) {
+            FILE* df = fopen("/tmp/vjcosmos_osc_debug.log", "a");
+            if (df) {
+                fprintf(df, "%d: addr=\"%s\" len=%d args=%d", oscDumpCount, addr.c_str(), (int)addr.length(), (int)msg.getNumArgs());
+                for (int i = 0; i < std::min((int)msg.getNumArgs(), 3); i++) {
+                    if (msg.getArgType(i) == OFXOSC_TYPE_FLOAT) fprintf(df, " arg%d=%f", i, msg.getArgAsFloat(i));
+                    else if (msg.getArgType(i) == OFXOSC_TYPE_INT32) fprintf(df, " arg%d=%d", i, msg.getArgAsInt32(i));
+                    else fprintf(df, " arg%d=(other)", i);
+                }
+                fprintf(df, "\n");
+                fclose(df);
+                oscDumpCount++;
+            }
+        }
 
         if      (addr == "/vjcosmos/bass")     { oscBass     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
         else if (addr == "/vjcosmos/mid")      { oscMid      = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
@@ -411,6 +452,15 @@ void ofApp::processOscMessages() {
                 float val = msg.getArgAsFloat(0);
                 oscParams[paramName] = val;
                 oscParamMsgCount++;
+                // Verify storage
+                {
+                    FILE* vf = fopen("/tmp/vjcosmos_store_debug.log", "a");
+                    if (vf) {
+                        fprintf(vf, "STORED: %s = %f, oscParams.size()=%d\n",
+                                paramName.c_str(), val, (int)oscParams.size());
+                        fclose(vf);
+                    }
+                }
                 oscParamLog[paramName] = { val, ofGetElapsedTimef(), true };
                 // Log first time or value change (throttled)
                 static std::map<std::string, float> lastLogged;

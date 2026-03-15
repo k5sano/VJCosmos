@@ -10,6 +10,7 @@
 #include <set>
 #include <vector>
 #include <algorithm>
+#include <fstream>
 
 // ── グリッチ多角形 ────────────────────────────────────────────────────────────
 struct GlitchPolygon {
