@@ -283,7 +283,7 @@ void ofApp::applyMidiParams(float dt) {
         targets[12] = mapCC(CC_FLUID_SAT,          0.0f,   1.0f,   1.0f);
         targets[13] = mapCC(CC_PLEXUS_SPEED,       0.1f,   3.0f,   1.0f);
         targets[14] = mapCC(CC_RESERVED,           0.0f,   1.0f,   0.0f);
-        targets[15] = mapCC(CC_MASTER_BRIGHT,      0.5f,   1.5f,   1.0f);
+        targets[15] = mapCC(CC_MASTER_BRIGHT,      0.0f,   2.0f,   1.0f);
 
         trigClear   = midiTrigFluidClear;   midiTrigFluidClear   = false;
         trigPalette = midiTrigPaletteNext;  midiTrigPaletteNext  = false;
@@ -743,9 +743,25 @@ void ofApp::applyEffectChain(float w, float h) {
         s.setUniform1f("time", t);
     });
 
-    // 最終結果を画面に描画
-    ofSetColor(255);
-    src->draw(0,0,w,h);
+    // 最終結果を画面に描画（マスター輝度適用: 0=黒, 1=通常, 2=白）
+    if (mMasterBright <= 1.0f) {
+        // 0→0(黒), 1.0→255(通常)
+        int tint = (int)(mMasterBright * 255);
+        ofSetColor(tint, tint, tint);
+        src->draw(0,0,w,h);
+    } else {
+        // 1.0→通常, 2.0→真っ白
+        ofSetColor(255);
+        src->draw(0,0,w,h);
+        // additive白で塗りつぶし
+        ofPushStyle();
+        ofEnableBlendMode(OF_BLENDMODE_ADD);
+        int extra = (int)ofClamp((mMasterBright - 1.0f) * 255, 0, 255);
+        ofSetColor(extra, extra, extra);
+        ofDrawRectangle(0, 0, w, h);
+        ofEnableBlendMode(OF_BLENDMODE_ALPHA);
+        ofPopStyle();
+    }
 }
 
 // ── Update Coordinate Labels ──────────────────────────────────────────────────
@@ -1287,19 +1303,7 @@ void ofApp::draw() {
     // 簡易的に publishScreen を使う（画面全体をキャプチャ、UI描画前）
     syphonServer.publishScreen();
 
-    // 4. マスター明るさ
-    if (mMasterBright < 0.99f) {
-        ofPushStyle();
-        ofSetColor(0, 0, 0, (int)((1.0f - mMasterBright) * 510));
-        ofDrawRectangle(0,0,w,h); ofPopStyle();
-    } else if (mMasterBright > 1.01f) {
-        ofPushStyle();
-        ofEnableBlendMode(OF_BLENDMODE_ADD);
-        ofSetColor(255, 255, 255, (int)((mMasterBright - 1.0f) * 510));
-        ofDrawRectangle(0,0,w,h);
-        ofEnableBlendMode(OF_BLENDMODE_ALPHA);
-        ofPopStyle();
-    }
+    // 4. マスター明るさ — applyEffectChain内でFBOティントとして適用済み
 
     // 5. ヘルプオーバーレイ
     if (showHelp) {
@@ -1356,6 +1360,21 @@ void ofApp::draw() {
             +" plexus:"+(plexusVisible?"ON":"OFF")
             +" freeze:"+(frozen?"ON":"OFF")
             +" [H]elp", 10, y); y+=16;
+
+        // MIDI CC raw values + master brightness
+        {
+            std::lock_guard<std::mutex> lock(midiMutex);
+            string midiLine = "MIDI CC:";
+            int ccs[] = {CC_DISSIPATION, CC_VEL_DISSIPATION, CC_ROT_SPEED, CC_MASTER_BRIGHT};
+            const char* names[] = {"dis", "vel", "rot", "mBrt"};
+            for (int i = 0; i < 4; i++) {
+                auto it = midiCC.find(ccs[i]);
+                midiLine += " " + string(names[i]) + "=";
+                midiLine += (it != midiCC.end()) ? ofToString(it->second, 2) : "---";
+            }
+            midiLine += " | mMasterBright=" + ofToString(mMasterBright, 3);
+            ofDrawBitmapStringHighlight(midiLine, 10, y); y+=16;
+        }
 
         string audioName = (currentAudioDevice < (int)inputDevices.size())
             ? inputDevices[currentAudioDevice].name : "default";
