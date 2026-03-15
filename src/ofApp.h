@@ -261,6 +261,28 @@ public:
     void updateTypography(float dt, float w, float h);
     void injectTypography(float w, float h);
 
+    // ── VisualSynth シェーダーモード ─────────────────────────────────────────
+    static const int VS_NUM_MODES = 10;
+    ofShader vsShaders[VS_NUM_MODES];
+    string   vsModeNames[VS_NUM_MODES];
+    int      vsCurrentMode = -1;  // -1 = 流体モード, 0-9 = シェーダーモード
+    bool     vsActive = false;
+
+    float vsSpeed      = 1.0f;
+    float vsBeatPower  = 1.0f;
+    float vsColorShift = 0.0f;
+    float vsZoom       = 1.0f;
+    float vsGlow       = 1.0f;
+    float vsDistortion = 0.0f;
+    float vsAccTime    = 0.0f;
+
+    // FFT テクスチャ（256x1, GL_LUMINANCE, sampler2DRect用）
+    ofTexture vsFftTexture;
+    unsigned char vsFftPixels[256];
+
+    void setupVsShaders();
+    void drawVsShader(float w, float h);
+
     // ── Syphon 出力 ──────────────────────────────────────────────────────────
     ofxSyphonServer syphonServer;
 

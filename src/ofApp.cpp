@@ -124,6 +124,71 @@ void ofApp::setupEffects() {
     fx[FX_CRT].shader.load("shaders/passthrough.vert", "shaders/crt.frag");
 }
 
+// ── VisualSynth Shaders ───────────────────────────────────────────────────────
+void ofApp::setupVsShaders() {
+    string v = "shaders/passthrough.vert";
+    vsShaders[0].load(v, "shaders/vs_fractal_tunnel.frag");
+    vsShaders[1].load(v, "shaders/vs_audio_terrain.frag");
+    vsShaders[2].load(v, "shaders/vs_kaleidoscope.frag");
+    vsShaders[3].load(v, "shaders/vs_plasma_warp.frag");
+    vsShaders[4].load(v, "shaders/vs_voronoi.frag");
+    vsShaders[5].load(v, "shaders/vs_neon_rings.frag");
+    vsShaders[6].load(v, "shaders/vs_liquid_metal.frag");
+    vsShaders[7].load(v, "shaders/vs_wormhole.frag");
+    vsShaders[8].load(v, "shaders/vs_synthwave.frag");
+    vsShaders[9].load(v, "shaders/vs_starburst.frag");
+
+    vsModeNames[0] = "Fractal Tunnel";
+    vsModeNames[1] = "Audio Terrain";
+    vsModeNames[2] = "Kaleidoscope";
+    vsModeNames[3] = "Plasma Warp";
+    vsModeNames[4] = "Voronoi Cells";
+    vsModeNames[5] = "Neon Rings";
+    vsModeNames[6] = "Liquid Metal";
+    vsModeNames[7] = "Wormhole";
+    vsModeNames[8] = "Synthwave";
+    vsModeNames[9] = "Starburst";
+
+    vsFftTexture.allocate(256, 1, GL_LUMINANCE);
+    memset(vsFftPixels, 0, 256);
+}
+
+void ofApp::drawVsShader(float w, float h) {
+    if (vsCurrentMode < 0 || vsCurrentMode >= VS_NUM_MODES) return;
+
+    // prevAmplitude → 256 bins にダウンサンプル
+    if (!prevAmplitude.empty()) {
+        float ratio = (float)prevAmplitude.size() / 256.0f;
+        for (int i = 0; i < 256; i++) {
+            int idx = ofClamp((int)(i * ratio), 0, (int)prevAmplitude.size() - 1);
+            vsFftPixels[i] = (unsigned char)(ofClamp(prevAmplitude[idx], 0.0f, 1.0f) * 255.0f);
+        }
+    }
+    vsFftTexture.loadData(vsFftPixels, 256, 1, GL_LUMINANCE);
+
+    float beat = ofClamp(sBass * vsBeatPower * 2.0f, 0.0f, 1.0f);
+    float volume = (sBass + sMid + sHigh) / 3.0f;
+
+    ofShader& s = vsShaders[vsCurrentMode];
+    if (s.isLoaded()) {
+        s.begin();
+        s.setUniform1f("u_time",       vsAccTime);
+        s.setUniform2f("u_resolution", w, h);
+        s.setUniform1f("u_beat",       beat);
+        s.setUniform1f("u_bass",       sBass);
+        s.setUniform1f("u_mid",        sMid);
+        s.setUniform1f("u_high",       sHigh);
+        s.setUniform1f("u_volume",     volume);
+        s.setUniform1f("u_colorShift", vsColorShift);
+        s.setUniform1f("u_zoom",       vsZoom);
+        s.setUniform1f("u_glow",       vsGlow);
+        s.setUniform1f("u_distortion", vsDistortion);
+        s.setUniformTexture("u_fft",   vsFftTexture, 1);
+        ofDrawRectangle(0, 0, w, h);
+        s.end();
+    }
+}
+
 // ── Setup ─────────────────────────────────────────────────────────────────────
 void ofApp::setup() {
     ofSetFrameRate(60);
@@ -156,6 +221,7 @@ void ofApp::setup() {
     bloomShader.load     ("shaders/passthrough.vert", "shaders/bloom.frag");
 
     setupEffects();
+    setupVsShaders();
 
     ofSoundStreamSettings ss;
     ss.setInListener(this);
@@ -451,6 +517,21 @@ void ofApp::processOscMessages() {
         else if (addr.find("/vjcosmos/flux")     != string::npos) { oscFlux     = msg.getArgAsFloat(0); oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
         else if (addr.find("/vjcosmos/onset")    != string::npos) { oscOnset    = msg.getArgAsFloat(0) > 0.5f; oscFftActive = true; oscFftTimeout = 2.0f; oscFftMsgCount++; }
 
+        // VisualSynth messages
+        if (addr.find("/vjcosmos/vs/") != string::npos && msg.getNumArgs() > 0) {
+            if      (addr.find("/vs/mode")       != string::npos) {
+                int mode = msg.getArgAsInt32(0);
+                if (mode < 0) { vsActive = false; }
+                else { vsActive = true; vsCurrentMode = ofClamp(mode, 0, VS_NUM_MODES - 1); }
+            }
+            else if (addr.find("/vs/speed")      != string::npos) { vsSpeed = msg.getArgAsFloat(0); }
+            else if (addr.find("/vs/beatPower")   != string::npos) { vsBeatPower = msg.getArgAsFloat(0); }
+            else if (addr.find("/vs/colorShift")  != string::npos) { vsColorShift = msg.getArgAsFloat(0); }
+            else if (addr.find("/vs/zoom")        != string::npos) { vsZoom = msg.getArgAsFloat(0); }
+            else if (addr.find("/vs/glow")        != string::npos) { vsGlow = msg.getArgAsFloat(0); }
+            else if (addr.find("/vs/distortion")  != string::npos) { vsDistortion = msg.getArgAsFloat(0); }
+        }
+
         // Parameter messages (always check, not else-if, in case find matches above too)
         auto paramPos = addr.find("/vjcosmos/param/");
         if (paramPos != string::npos && msg.getNumArgs() > 0) {
@@ -579,6 +660,23 @@ void ofApp::keyPressed(int key) {
         if (key == shiftDigits[i]) {
             loadPreset("preset_" + ofToString(i + 1));
             return;
+        }
+    }
+
+    // ── VisualSynth モード切替 ──
+    // B: 流体 ↔ シェーダー トグル
+    if (key == 'b' || key == 'B') {
+        vsActive = !vsActive;
+        if (vsActive && vsCurrentMode < 0) vsCurrentMode = 0;
+        ofLogNotice("VS") << (vsActive ? "Shader mode: " + vsModeNames[vsCurrentMode] : "Fluid mode");
+    }
+    // F1〜F10: シェーダーモード選択
+    if (key >= OF_KEY_F1 && key <= OF_KEY_F10) {
+        int mode = key - OF_KEY_F1;
+        if (mode < VS_NUM_MODES) {
+            vsCurrentMode = mode;
+            vsActive = true;
+            ofLogNotice("VS") << "Shader mode: " << vsModeNames[mode];
         }
     }
 }
@@ -898,6 +996,8 @@ void ofApp::drawCoordLabels() {
 
 // ── Update ────────────────────────────────────────────────────────────────────
 void ofApp::update() {
+    vsAccTime += ofGetLastFrameTime() * vsSpeed;
+
     std::vector<float> buf; float localRms;
     { std::lock_guard<std::mutex> lock(audioMutex); buf = audioBuffer; localRms = rawRms; }
 
@@ -1254,36 +1354,43 @@ void ofApp::draw() {
     // 2. 全レイヤーを sceneFbo に合成
     sceneFbo.begin(); ofClear(0,0,0,255);
 
-    if (bloomEnabled) {
-        float bloomThresh = onset ? std::max(0.0f, mBloomThreshold - 0.2f) : mBloomThreshold;
-        brightFbo.begin(); ofClear(0,0,0,255);
-        brightnessShader.begin();
-        brightnessShader.setUniformTexture("tex", renderFbo.getTexture(), 0);
-        brightnessShader.setUniform1f("threshold", bloomThresh);
-        renderFbo.draw(0,0,w,h); brightnessShader.end(); brightFbo.end();
-
-        float ba = 1.0f + sBass*3.0f;
-        blurHFbo.begin(); ofClear(0,0,0,255);
-        blurShader.begin();
-        blurShader.setUniformTexture("tex", brightFbo.getTexture(), 0);
-        blurShader.setUniform2f("direction",1,0); blurShader.setUniform1f("blurAmount",ba);
-        brightFbo.draw(0,0,w,h); blurShader.end(); blurHFbo.end();
-
-        blurVFbo.begin(); ofClear(0,0,0,255);
-        blurShader.begin();
-        blurShader.setUniformTexture("tex", blurHFbo.getTexture(), 0);
-        blurShader.setUniform2f("direction",0,1); blurShader.setUniform1f("blurAmount",ba);
-        blurHFbo.draw(0,0,w,h); blurShader.end(); blurVFbo.end();
-
-        bloomShader.begin();
-        bloomShader.setUniformTexture("baseTex", renderFbo.getTexture(), 0);
-        bloomShader.setUniformTexture("bloomTex", blurVFbo.getTexture(), 1);
-        bloomShader.setUniform1f("bloomIntensity", mBloomIntensity + sRms*2.0f);
-        renderFbo.draw(0,0,w,h); bloomShader.end();
+    if (vsActive && vsCurrentMode >= 0) {
+        // ── VisualSynth シェーダーモード ──
+        drawVsShader(w, h);
     } else {
-        renderFbo.draw(0,0,w,h);
+        // ── 既存の流体シミュレーション描画 ──
+        if (bloomEnabled) {
+            float bloomThresh = onset ? std::max(0.0f, mBloomThreshold - 0.2f) : mBloomThreshold;
+            brightFbo.begin(); ofClear(0,0,0,255);
+            brightnessShader.begin();
+            brightnessShader.setUniformTexture("tex", renderFbo.getTexture(), 0);
+            brightnessShader.setUniform1f("threshold", bloomThresh);
+            renderFbo.draw(0,0,w,h); brightnessShader.end(); brightFbo.end();
+
+            float ba = 1.0f + sBass*3.0f;
+            blurHFbo.begin(); ofClear(0,0,0,255);
+            blurShader.begin();
+            blurShader.setUniformTexture("tex", brightFbo.getTexture(), 0);
+            blurShader.setUniform2f("direction",1,0); blurShader.setUniform1f("blurAmount",ba);
+            brightFbo.draw(0,0,w,h); blurShader.end(); blurHFbo.end();
+
+            blurVFbo.begin(); ofClear(0,0,0,255);
+            blurShader.begin();
+            blurShader.setUniformTexture("tex", blurHFbo.getTexture(), 0);
+            blurShader.setUniform2f("direction",0,1); blurShader.setUniform1f("blurAmount",ba);
+            blurHFbo.draw(0,0,w,h); blurShader.end(); blurVFbo.end();
+
+            bloomShader.begin();
+            bloomShader.setUniformTexture("baseTex", renderFbo.getTexture(), 0);
+            bloomShader.setUniformTexture("bloomTex", blurVFbo.getTexture(), 1);
+            bloomShader.setUniform1f("bloomIntensity", mBloomIntensity + sRms*2.0f);
+            renderFbo.draw(0,0,w,h); bloomShader.end();
+        } else {
+            renderFbo.draw(0,0,w,h);
+        }
     }
 
+    // ── 共通レイヤー（流体・シェーダー両モード） ──
     if (plexusVisible) drawPlexusLayer(w, h);
     drawWireframe();
 
@@ -1334,6 +1441,8 @@ void ofApp::draw() {
         ofDrawBitmapString("H  This help", x, y); y+=16;
         ofDrawBitmapString("R  Fluid pause", x, y); y+=16;
         ofDrawBitmapString("V  Typography", x, y); y+=16;
+        ofDrawBitmapString("B  VS Shader toggle", x, y); y+=16;
+        ofDrawBitmapString("F1-F10 VS Shader select", x, y); y+=16;
         ofDrawBitmapString("A  Switch Audio Device", x, y); y+=24;
         ofDrawBitmapString("--- EFFECTS ---", x, y); y+=18;
         for (int i = 0; i < FX_COUNT; i++) {
@@ -1368,6 +1477,7 @@ void ofApp::draw() {
                     + ":" + (fx[i].enabled?"ON":"--");
         }
         fxLine += " [V]typ:" + string(typoEnabled?"ON":"--");
+        fxLine += " [B]vs:" + string(vsActive ? vsModeNames[vsCurrentMode] : "--");
         ofDrawBitmapStringHighlight(fxLine, 10, y); y+=16;
 
         ofDrawBitmapStringHighlight("bloom:"+(bloomEnabled?string("ON"):"OFF")

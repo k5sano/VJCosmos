@@ -94,3 +94,36 @@ make && make run
 - `ofxFft::getAmplitude()` で振幅スペクトラム (float*) を取得
 - `ofxFft::getBinSize()` でビン数（= bufferSize/2 + 1）
 - signalNormalize / signalResize は不要、setSignal に生波形を渡せばOK
+
+## macOS .app バンドル化の注意
+
+### データパス問題（重要）
+oF アプリを `.app` バンドルとして `/Applications/` 等に移動すると、`ofToDataPath()` がバンドル外の間違ったパス（例: `/Applications/data`）を参照する。
+
+**原因**: oF のデフォルトのデータパス解決は実行ファイルからの相対パスだが、.app バンドル内では階層が異なる。
+
+**解決策**: `setup()` の最初に `CFBundleGetMainBundle()` でバンドルの Resources パスを取得し `ofSetDataPathRoot()` で設定する。`ofFilePath::getCurrentExeDir()` ベースの方法は .app 内では失敗する場合がある。
+
+```cpp
+#ifdef TARGET_OSX
+#include <CoreFoundation/CoreFoundation.h>
+// CFBundleGetMainBundle → CFBundleCopyResourcesDirectoryURL → ofSetDataPathRoot
+#endif
+```
+
+### バンドル手順
+1. `make Release -j4`
+2. `./bundle.sh` で `bin/data/*` を `.app/Contents/Resources/data/` にコピー
+3. `xattr -cr bin/VJCosmos.app` で隔離属性を除去
+4. `/Applications/` にコピー
+
+### bundle.sh の構造
+- コピー先は `Contents/Resources/data/`（`Resources/` 直下ではない）
+- Info.plist の `CFBundleName` / `CFBundleDisplayName` を VJCosmos に変更
+- `NSMicrophoneUsageDescription` が Info.plist に必要（マイクアクセス）
+
+### よくある失敗
+- `bin/data/` を `Resources/` 直下にコピー → oF が見つけられない
+- `ofFilePath::getCurrentExeDir()` でパス構築 → .app 内で不正なパスになる
+- `xattr` 除去を忘れる → Gatekeeper がリソースアクセスをブロック
+- `/Applications/` 移動後にシェーダーだけ動かない → データパス問題
