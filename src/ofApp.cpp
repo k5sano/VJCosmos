@@ -520,9 +520,12 @@ void ofApp::processOscMessages() {
         // VisualSynth messages
         if (addr.find("/vjcosmos/vs/") != string::npos && msg.getNumArgs() > 0) {
             if      (addr.find("/vs/mode")       != string::npos) {
-                int mode = msg.getArgAsInt32(0);
-                if (mode < 0) { vsActive = false; }
-                else { vsActive = true; vsCurrentMode = ofClamp(mode, 0, VS_NUM_MODES - 1); }
+                int mode = (msg.getArgType(0) == OFXOSC_TYPE_FLOAT)
+                         ? (int)msg.getArgAsFloat(0)
+                         : msg.getArgAsInt32(0);
+                // 0 = 流体モード, 1-10 = シェーダーモード 0-9
+                if (mode <= 0) { vsActive = false; }
+                else { vsActive = true; vsCurrentMode = ofClamp(mode - 1, 0, VS_NUM_MODES - 1); }
             }
             else if (addr.find("/vs/speed")      != string::npos) { vsSpeed = msg.getArgAsFloat(0); }
             else if (addr.find("/vs/beatPower")   != string::npos) { vsBeatPower = msg.getArgAsFloat(0); }
