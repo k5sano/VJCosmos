@@ -263,27 +263,38 @@ void ofApp::applyMidiParams(float dt) {
     bool windLeft, windRight;
     {
         std::lock_guard<std::mutex> lock(midiMutex);
-        auto mapCC = [&](int ccNum, float lo, float hi, float def) -> float {
+        // MIDI CC値が変化していたら対応するOSCオーバーライドを解除
+        static std::map<int, float> prevMidiCC;
+        auto mapCC = [&](int ccNum, float lo, float hi, float def, const char* oscName = nullptr) -> float {
             auto it = midiCC.find(ccNum);
-            return it != midiCC.end() ? ofLerp(lo, hi, it->second) : def;
+            if (it == midiCC.end()) return def;
+            // MIDIが実際に変化した時だけOSCオーバーライドを解除（初回登録は無視）
+            if (oscName) {
+                auto prev = prevMidiCC.find(ccNum);
+                if (prev != prevMidiCC.end() && fabsf(prev->second - it->second) > 0.001f) {
+                    oscParams.erase(oscName);
+                }
+                prevMidiCC[ccNum] = it->second;
+            }
+            return ofLerp(lo, hi, it->second);
         };
 
-        targets[0]  = mapCC(CC_DISSIPATION,      0.9f,   1.0f,   0.999f);
-        targets[1]  = mapCC(CC_VEL_DISSIPATION,   0.8f,   1.0f,   0.99f);
-        targets[2]  = mapCC(CC_BLOOM_INTENSITY,    0.0f,   2.0f,   0.5f);
-        targets[3]  = mapCC(CC_BLOOM_THRESHOLD,    0.1f,   0.8f,   0.3f);
-        targets[4]  = mapCC(CC_BASS_SENS,          0.5f,   3.0f,   1.0f);
-        targets[5]  = mapCC(CC_MID_SENS,           0.5f,   3.0f,   1.0f);
-        targets[6]  = mapCC(CC_HIGH_SENS,          0.5f,   3.0f,   1.0f);
+        targets[0]  = mapCC(CC_DISSIPATION,      0.9f,   1.0f,   0.999f, "dissipation");
+        targets[1]  = mapCC(CC_VEL_DISSIPATION,   0.8f,   1.0f,   0.99f,  "velDissipation");
+        targets[2]  = mapCC(CC_BLOOM_INTENSITY,    0.0f,   2.0f,   0.5f,   "bloomIntensity");
+        targets[3]  = mapCC(CC_BLOOM_THRESHOLD,    0.1f,   0.8f,   0.3f,   "bloomThreshold");
+        targets[4]  = mapCC(CC_BASS_SENS,          0.5f,   3.0f,   1.0f,   "bassSens");
+        targets[5]  = mapCC(CC_MID_SENS,           0.5f,   3.0f,   1.0f,   "midSens");
+        targets[6]  = mapCC(CC_HIGH_SENS,          0.5f,   3.0f,   1.0f,   "highSens");
         targets[7]  = mapCC(CC_PLEXUS_THRESH,     50.0f, 300.0f, 150.0f);
-        targets[8]  = mapCC(CC_ROT_SPEED,          0.0f,  60.0f,  15.0f);
-        targets[9]  = mapCC(CC_DISPLACEMENT,       0.0f,   2.0f,   1.0f);
-        targets[10] = mapCC(CC_GLITCH_FREQ,        0.0f,   3.0f,   1.0f);
-        targets[11] = mapCC(CC_GRAVITY,           -0.05f,  0.05f, -0.0098f);
-        targets[12] = mapCC(CC_FLUID_SAT,          0.0f,   1.0f,   1.0f);
-        targets[13] = mapCC(CC_PLEXUS_SPEED,       0.1f,   3.0f,   1.0f);
+        targets[8]  = mapCC(CC_ROT_SPEED,          0.0f,  60.0f,  15.0f,   "rotSpeed");
+        targets[9]  = mapCC(CC_DISPLACEMENT,       0.0f,   2.0f,   1.0f,   "displacement");
+        targets[10] = mapCC(CC_GLITCH_FREQ,        0.0f,   3.0f,   1.0f,   "glitchFreq");
+        targets[11] = mapCC(CC_GRAVITY,           -0.05f,  0.05f, -0.0098f,"gravity");
+        targets[12] = mapCC(CC_FLUID_SAT,          0.0f,   1.0f,   1.0f,   "fluidSaturation");
+        targets[13] = mapCC(CC_PLEXUS_SPEED,       0.1f,   3.0f,   1.0f,   "plexusSpeed");
         targets[14] = mapCC(CC_RESERVED,           0.0f,   1.0f,   0.0f);
-        targets[15] = mapCC(CC_MASTER_BRIGHT,      0.0f,   2.0f,   1.0f);
+        targets[15] = mapCC(CC_MASTER_BRIGHT,      0.0f,   2.0f,   1.0f,   "masterBrightness");
 
         trigClear   = midiTrigFluidClear;   midiTrigFluidClear   = false;
         trigPalette = midiTrigPaletteNext;  midiTrigPaletteNext  = false;
@@ -543,10 +554,13 @@ void ofApp::keyPressed(int key) {
         }
     }
 
-    // エフェクトレイヤーのトグル
+    // エフェクトレイヤーのトグル（キーボード操作時はOSCオーバーライドを解除）
+    const char* fxOscNames[] = {"fxKaleido", "fxCrt", "fxWave", "fxGlitch", "fxEdge", "fxMono", "fxMirror"};
     for (int i = 0; i < FX_COUNT; i++) {
-        if (key == fx[i].key || key == toupper(fx[i].key))
+        if (key == fx[i].key || key == toupper(fx[i].key)) {
             fx[i].enabled = !fx[i].enabled;
+            oscParams.erase(fxOscNames[i]);
+        }
     }
 
     // プリセット: Cmd+S = quick save, Cmd+L = quick load
